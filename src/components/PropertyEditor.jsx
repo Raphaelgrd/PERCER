@@ -3,6 +3,16 @@ import { ColorSwatch, hexToRgb, rgbToHex } from "./ColorPicker";
 
 // ── CSS utilities ───────────────────────────────────────────────────────────────
 
+function resolveVars(css) {
+  if (!css) return css;
+  const vars = {};
+  for (const m of css.matchAll(/(--[\w-]+)\s*:\s*([^;}\n]+)/g)) {
+    if (!vars[m[1]]) vars[m[1]] = m[2].trim();
+  }
+  if (!Object.keys(vars).length) return css;
+  return css.replace(/var\((--[\w-]+)\)/g, (_, name) => vars[name] || _);
+}
+
 function getDecl(css, prop) {
   if (!css) return null;
   for (const line of css.split("\n")) {
@@ -357,7 +367,9 @@ function PropSelect({ value, options, labels, onChange, width }) {
 
 // ── Main PropertyEditor ─────────────────────────────────────────────────────────
 
-export function PropertyEditor({ css, html, onChange }) {
+export function PropertyEditor({ css: rawCss, html, onChange }) {
+  const css = resolveVars(rawCss);
+
   if (!css) return (
     <div style={{ padding: 32, color: "var(--text-muted)", fontSize: 12, textAlign: "center", fontFamily: "JetBrains Mono" }}>
       Aucun CSS à éditer

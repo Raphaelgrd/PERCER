@@ -290,13 +290,50 @@ function extractAnimations(css, keyframes) {
   return result.slice(0, 12);
 }
 
+// Extract the full :root { } block (needed so CSS vars resolve in Shadow DOM)
+function getRootVarsBlock(css) {
+  const m = css.match(/:root\s*\{([^}]*)\}/s);
+  return m ? `:root {\n${m[1].trim()}\n}` : "";
+}
+
+// Extract JS snippets that reference any of the element's classes
+function extractJSForElement(classes, allJS) {
+  if (!allJS || !classes.length) return null;
+  // Check if any class is mentioned in the JS
+  const mentioned = classes.filter(c =>
+    allJS.includes(`.${c}`) || allJS.includes(`'${c}'`) || allJS.includes(`"${c}"`)
+  );
+  if (!mentioned.length) return null;
+  // If JS is small enough, return it whole; otherwise extract relevant lines
+  if (allJS.length <= 8000) return allJS.trim();
+  // Try to extract blocks that reference these classes
+  const lines = allJS.split("\n");
+  const blocks = [];
+  let inBlock = false, depth = 0, blockLines = [];
+  for (const line of lines) {
+    const mentionsClass = mentioned.some(c =>
+      line.includes(`.${c}`) || line.includes(`'${c}'`) || line.includes(`"${c}"`)
+    );
+    if (mentionsClass && !inBlock) { inBlock = true; blockLines = []; }
+    if (inBlock) {
+      blockLines.push(line);
+      depth += (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
+      if (depth <= 0 && blockLines.length > 1) {
+        blocks.push(blockLines.join("\n"));
+        inBlock = false; depth = 0;
+      }
+    }
+  }
+  return blocks.length ? blocks.join("\n\n") : null;
+}
+
 // ─── HTML extractors ──────────────────────────────────────────────────────────
 
 function getClasses(el) {
   return Array.from(el.classList || []);
 }
 
-function extractButtons(doc, pageName, allCSS, keyframes, seen, results) {
+function extractButtons(doc, pageName, allCSS, keyframes, allJS, seen, results) {
   const selectors = [
     "button",
     "a[class*='btn']", "a[class*='button']",
@@ -318,27 +355,26 @@ function extractButtons(doc, pageName, allCSS, keyframes, seen, results) {
 
     const classes = getClasses(el);
     const label = textContent(el) || el.getAttribute("value") || "Button";
-    const bg = guessColor(el) || "#1a1916";
-    const radius = parseInt(inlineStyle(el, "border-radius")) || 6;
-    const css = extractCSSForClasses(classes, allCSS, keyframes);
-    const vars = extractCSSVars(allCSS, css);
+    const elCSS = extractCSSForClasses(classes, allCSS, keyframes);
+    const rootVars = getRootVarsBlock(allCSS);
+    const elJS = extractJSForElement(classes, allJS);
 
     results.push({
       id: uid("b", results.length),
-      name: label.slice(0, 40),
+      name: label.slice(0, 40) || "Button",
       src: pageName,
       category: "buttons",
-      variant: { kind: "btn", bg, fg: "#fff", border: bg, label: label.slice(0, 30), radius },
+      variant: { kind: "btn", bg: "#1a1916", fg: "#fff", border: "#1a1916", label: label.slice(0, 30), radius: 6 },
       html,
-      css: [vars, css].filter(Boolean).join("\n\n") || `/* classes: ${classes.join(", ")} */`,
-      js: null,
+      css: [rootVars, elCSS].filter(Boolean).join("\n\n") || `/* classes: ${classes.join(", ")} */`,
+      js: elJS,
       notes: null,
     });
     if (results.length >= 24) break;
   }
 }
 
-function extractForms(doc, pageName, allCSS, keyframes, seen, results) {
+function extractForms(doc, pageName, allCSS, keyframes, allJS, seen, results) {
   const wrappers = [
     ...doc.querySelectorAll("input[type='text'], input[type='email'], input[type='tel'], input[type='search'], input[type='password']"),
     ...doc.querySelectorAll("select"),
@@ -363,8 +399,9 @@ function extractForms(doc, pageName, allCSS, keyframes, seen, results) {
       : el.getAttribute("type") === "search" ? "search"
       : "input";
 
-    const css = extractCSSForClasses(classes, allCSS, keyframes);
-    const vars = extractCSSVars(allCSS, css);
+    const elCSS = extractCSSForClasses(classes, allCSS, keyframes);
+    const rootVars = getRootVarsBlock(allCSS);
+    const elJS = extractJSForElement(classes, allJS);
 
     results.push({
       id: uid("f", results.length),
@@ -373,15 +410,15 @@ function extractForms(doc, pageName, allCSS, keyframes, seen, results) {
       category: "forms",
       variant: { kind, label: label.slice(0, 30), placeholder: el.getAttribute("placeholder") || "" },
       html,
-      css: [vars, css].filter(Boolean).join("\n\n") || `/* classes: ${classes.join(", ")} */`,
-      js: null,
+      css: [rootVars, elCSS].filter(Boolean).join("\n\n") || `/* classes: ${classes.join(", ")} */`,
+      js: elJS,
       notes: null,
     });
     if (results.length >= 16) break;
   }
 }
 
-function extractCards(doc, pageName, allCSS, keyframes, seen, results) {
+function extractCards(doc, pageName, allCSS, keyframes, allJS, seen, results) {
   const cardEls = doc.querySelectorAll(
     "article, [class*='card'], [class*='tile'], [class*='product'], [class*='item'], [class*='teaser']"
   );
@@ -396,8 +433,9 @@ function extractCards(doc, pageName, allCSS, keyframes, seen, results) {
     const classes = getClasses(el);
     const title = el.querySelector("h1,h2,h3,h4,h5,h6")?.textContent?.trim() ||
       el.querySelector("[class*='title']")?.textContent?.trim() || "Card";
-    const css = extractCSSForClasses(classes, allCSS, keyframes);
-    const vars = extractCSSVars(allCSS, css);
+    const elCSS = extractCSSForClasses(classes, allCSS, keyframes);
+    const rootVars = getRootVarsBlock(allCSS);
+    const elJS = extractJSForElement(classes, allJS);
 
     results.push({
       id: uid("c", results.length),
@@ -406,15 +444,15 @@ function extractCards(doc, pageName, allCSS, keyframes, seen, results) {
       category: "cards",
       variant: { kind: "article", title: title.slice(0, 30), date: "", category: "" },
       html,
-      css: [vars, css].filter(Boolean).join("\n\n"),
-      js: null,
+      css: [rootVars, elCSS].filter(Boolean).join("\n\n"),
+      js: elJS,
       notes: null,
     });
     if (results.length >= 18) break;
   }
 }
 
-function extractNav(doc, pageName, allCSS, keyframes, seen, results) {
+function extractNav(doc, pageName, allCSS, keyframes, allJS, seen, results) {
   const navEls = doc.querySelectorAll("nav, header, [role='navigation'], [class*='nav'], [class*='menu'], [class*='header']");
   for (const el of navEls) {
     const html = el.outerHTML?.trim();
@@ -426,8 +464,9 @@ function extractNav(doc, pageName, allCSS, keyframes, seen, results) {
     const classes = getClasses(el);
     const tag = el.tagName.toLowerCase();
     const name = tag === "nav" ? "Navigation" : tag === "header" ? "Header" : "Nav / " + (classes[0] || "menu");
-    const css = extractCSSForClasses(classes, allCSS, keyframes);
-    const vars = extractCSSVars(allCSS, css);
+    const elCSS = extractCSSForClasses(classes, allCSS, keyframes);
+    const rootVars = getRootVarsBlock(allCSS);
+    const elJS = extractJSForElement(classes, allJS);
 
     results.push({
       id: uid("n", results.length),
@@ -436,15 +475,15 @@ function extractNav(doc, pageName, allCSS, keyframes, seen, results) {
       category: "nav",
       variant: { kind: "nav-main" },
       html,
-      css: [vars, css].filter(Boolean).join("\n\n"),
-      js: null,
+      css: [rootVars, elCSS].filter(Boolean).join("\n\n"),
+      js: elJS,
       notes: null,
     });
     if (results.length >= 8) break;
   }
 }
 
-function extractFooter(doc, pageName, allCSS, keyframes, seen, results) {
+function extractFooter(doc, pageName, allCSS, keyframes, allJS, seen, results) {
   const footerEls = doc.querySelectorAll("footer, [role='contentinfo'], [class*='footer']");
   for (const el of footerEls) {
     const html = el.outerHTML?.trim();
@@ -454,8 +493,9 @@ function extractFooter(doc, pageName, allCSS, keyframes, seen, results) {
     seen.add(h);
 
     const classes = getClasses(el);
-    const css = extractCSSForClasses(classes, allCSS, keyframes);
-    const vars = extractCSSVars(allCSS, css);
+    const elCSS = extractCSSForClasses(classes, allCSS, keyframes);
+    const rootVars = getRootVarsBlock(allCSS);
+    const elJS = extractJSForElement(classes, allJS);
 
     results.push({
       id: uid("ft", results.length),
@@ -464,15 +504,15 @@ function extractFooter(doc, pageName, allCSS, keyframes, seen, results) {
       category: "footer",
       variant: { kind: "footer-4" },
       html,
-      css: [vars, css].filter(Boolean).join("\n\n"),
-      js: null,
+      css: [rootVars, elCSS].filter(Boolean).join("\n\n"),
+      js: elJS,
       notes: null,
     });
     if (results.length >= 6) break;
   }
 }
 
-function extractHero(doc, pageName, allCSS, keyframes, seen, results) {
+function extractHero(doc, pageName, allCSS, keyframes, allJS, seen, results) {
   const heroEls = doc.querySelectorAll(
     "[class*='hero'], [class*='banner'], [class*='jumbotron'], [class*='cover'], section:first-of-type"
   );
@@ -486,8 +526,9 @@ function extractHero(doc, pageName, allCSS, keyframes, seen, results) {
 
     const classes = getClasses(el);
     const title = el.querySelector("h1,h2")?.textContent?.trim() || "Hero";
-    const css = extractCSSForClasses(classes, allCSS, keyframes);
-    const vars = extractCSSVars(allCSS, css);
+    const elCSS = extractCSSForClasses(classes, allCSS, keyframes);
+    const rootVars = getRootVarsBlock(allCSS);
+    const elJS = extractJSForElement(classes, allJS);
 
     results.push({
       id: uid("h", results.length),
@@ -496,8 +537,8 @@ function extractHero(doc, pageName, allCSS, keyframes, seen, results) {
       category: "hero",
       variant: { kind: "hero-editorial", title: title.slice(0, 40), sub: "" },
       html,
-      css: [vars, css].filter(Boolean).join("\n\n"),
-      js: null,
+      css: [rootVars, elCSS].filter(Boolean).join("\n\n"),
+      js: elJS,
       notes: null,
     });
     if (results.length >= 8) break;
@@ -765,12 +806,12 @@ export async function parseZip(file, onProgress) {
     const pageCss = allCSS + "\n" + inlineCSS;
     const pageKeyframes = { ...keyframes, ...extractKeyframes(inlineCSS) };
 
-    extractButtons(doc, pageName, pageCss, pageKeyframes, seenPerCat.buttons, elements.buttons);
-    extractForms(doc, pageName, pageCss, pageKeyframes, seenPerCat.forms, elements.forms);
-    extractCards(doc, pageName, pageCss, pageKeyframes, seenPerCat.cards, elements.cards);
-    extractNav(doc, pageName, pageCss, pageKeyframes, seenPerCat.nav, elements.nav);
-    extractFooter(doc, pageName, pageCss, pageKeyframes, seenPerCat.footer, elements.footer);
-    extractHero(doc, pageName, pageCss, pageKeyframes, seenPerCat.hero, elements.hero);
+    extractButtons(doc, pageName, pageCss, pageKeyframes, allJS, seenPerCat.buttons, elements.buttons);
+    extractForms(doc, pageName, pageCss, pageKeyframes, allJS, seenPerCat.forms, elements.forms);
+    extractCards(doc, pageName, pageCss, pageKeyframes, allJS, seenPerCat.cards, elements.cards);
+    extractNav(doc, pageName, pageCss, pageKeyframes, allJS, seenPerCat.nav, elements.nav);
+    extractFooter(doc, pageName, pageCss, pageKeyframes, allJS, seenPerCat.footer, elements.footer);
+    extractHero(doc, pageName, pageCss, pageKeyframes, allJS, seenPerCat.hero, elements.hero);
     extractIcons(doc, pageName, seenPerCat.icons, elements.icons);
     extractImages(doc, pageName, seenPerCat.images, elements.images);
 
