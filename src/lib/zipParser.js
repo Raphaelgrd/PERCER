@@ -128,11 +128,17 @@ function extractCSSForClasses(classNames, allCSS, keyframes = {}) {
   const rules = [];
   const seen = new Set();
 
+  // Elements that should never be included in isolated component CSS
+  const GLOBAL_SELECTOR = /^(html|body|:root|\*|main|section|article(?!\s*\.))/i;
+
   for (const block of blocks) {
     if (block.isKeyframe) continue;
     // each selector in a comma list is checked independently
     const selectors = block.selector.split(",").map(s => s.trim());
-    if (!selectors.some(s => classPattern.test(s))) continue;
+    // skip rules whose ALL matching selectors are global/layout-level (would pollute isolation)
+    const matching = selectors.filter(s => classPattern.test(s));
+    if (!matching.length) continue;
+    if (matching.every(s => GLOBAL_SELECTOR.test(s.split(/[\s>~+]/)[0]))) continue;
 
     const key = block.selector + "||" + block.body.slice(0, 120);
     if (seen.has(key)) continue;

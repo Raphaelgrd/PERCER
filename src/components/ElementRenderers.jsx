@@ -13,12 +13,13 @@ function ShadowPreview({ html, css, interactive }) {
     catch { shadow = el.shadowRoot; }
     if (!shadow) return;
 
+    const scopedCss = (css || "").replace(/:root\s*\{/g, ":host {");
     shadow.innerHTML = `
       <style>
         *, *::before, *::after { box-sizing: border-box; }
         :host { display: flex; align-items: center; justify-content: center; width: 100%; }
         ${interactive ? "" : "* { pointer-events: none !important; cursor: default !important; }"}
-        ${css || ""}
+        ${scopedCss}
       </style>
       ${html || ""}
     `;
