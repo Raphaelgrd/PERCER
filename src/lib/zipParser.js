@@ -38,13 +38,79 @@ function textContent(el) {
 
 // ─── CSS helpers ─────────────────────────────────────────────────────────────
 
-// Extract @keyframes blocks from CSS
+// ─── Robust CSS block parser (handles @media nesting) ─────────────────────────
+
+function parseCSSBlocks(css, mediaContext = "") {
+  const blocks = [];
+  let i = 0;
+
+  while (i < css.length) {
+    // skip whitespace
+    while (i < css.length && css[i] <= " ") i++;
+    if (i >= css.length) break;
+
+    // skip comments
+    if (css[i] === "/" && css[i + 1] === "*") {
+      const end = css.indexOf("*/", i + 2);
+      i = end === -1 ? css.length : end + 2;
+      continue;
+    }
+
+    // read selector up to '{'
+    let selStart = i;
+    while (i < css.length && css[i] !== "{" && css[i] !== "}") {
+      if (css[i] === "/" && css[i + 1] === "*") {
+        const end = css.indexOf("*/", i + 2);
+        i = end === -1 ? css.length : end + 2;
+      } else i++;
+    }
+
+    if (i >= css.length || css[i] === "}") { i++; continue; }
+
+    const selector = css.slice(selStart, i).trim();
+    i++; // skip '{'
+
+    // find matching closing brace
+    let depth = 1, bodyStart = i;
+    while (i < css.length && depth > 0) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}") depth--;
+      i++;
+    }
+    const body = css.slice(bodyStart, i - 1).trim();
+
+    if (!selector) continue;
+
+    if (/^@(media|supports|layer|container|document)/i.test(selector)) {
+      // recurse — keep the media context
+      const ctx = mediaContext ? `${mediaContext} and ${selector}` : selector;
+      blocks.push(...parseCSSBlocks(body, ctx));
+    } else if (/^@keyframes/i.test(selector)) {
+      // store keyframe block as-is
+      blocks.push({ selector, body, mediaContext, isKeyframe: true });
+    } else if (!selector.startsWith("@")) {
+      blocks.push({ selector, body, mediaContext, isKeyframe: false });
+    }
+  }
+
+  return blocks;
+}
+
+// Extract @keyframes blocks from CSS (brace-matching, handles complex bodies)
 function extractKeyframes(css) {
   const frames = {};
-  const re = /@keyframes\s+([\w-]+)\s*\{([\s\S]*?)\n\}/g;
+  const re = /@(?:-webkit-)?keyframes\s+([\w-]+)\s*\{/g;
   let m;
   while ((m = re.exec(css)) !== null) {
-    frames[m[1]] = `@keyframes ${m[1]} {\n${m[2]}\n}`;
+    const name = m[1];
+    let depth = 1, i = re.lastIndex;
+    while (i < css.length && depth > 0) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}") depth--;
+      i++;
+    }
+    const body = css.slice(re.lastIndex, i - 1).trim();
+    frames[name] = `@keyframes ${name} {\n  ${body}\n}`;
   }
   return frames;
 }
@@ -55,64 +121,57 @@ function extractCSSForClasses(classNames, allCSS, keyframes = {}) {
 
   const escaped = classNames.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const classPattern = new RegExp(
-    `\\.(?:${escaped.join("|")})(?:[\\s,{:>~+\\[#.]|$)`,
-    "g"
+    `\\.(?:${escaped.join("|")})(?=[\\s,{:>~+\\[#.\\)\\*]|$)`
   );
 
+  const blocks = parseCSSBlocks(allCSS);
   const rules = [];
   const seen = new Set();
 
-  // Simple rule extractor: find each { } block whose selector matches
-  const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
-  let m;
-  while ((m = ruleRe.exec(allCSS)) !== null) {
-    const selector = m[1].trim();
-    const body = m[2].trim();
-    if (!body) continue;
-    classPattern.lastIndex = 0;
-    if (classPattern.test(selector)) {
-      const key = selector + body;
-      if (!seen.has(key)) {
-        seen.add(key);
-        rules.push(`${selector} {\n  ${body.replace(/;\s*/g, ";\n  ").trim()}\n}`);
-      }
-    }
+  for (const block of blocks) {
+    if (block.isKeyframe) continue;
+    // each selector in a comma list is checked independently
+    const selectors = block.selector.split(",").map(s => s.trim());
+    if (!selectors.some(s => classPattern.test(s))) continue;
+
+    const key = block.selector + "||" + block.body.slice(0, 120);
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const ruleStr = block.mediaContext
+      ? `${block.mediaContext} {\n  ${block.selector} {\n    ${block.body.replace(/\n/g, "\n    ")}\n  }\n}`
+      : `${block.selector} {\n  ${block.body}\n}`;
+    rules.push(ruleStr);
   }
 
-  // Extract referenced animation names → include keyframes
-  const animNames = [];
-  const animRe = /animation(?:-name)?\s*:\s*([\w-]+)/g;
-  let am;
-  while ((am = animRe.exec(rules.join("\n"))) !== null) {
-    if (keyframes[am[1]]) animNames.push(am[1]);
+  // Include referenced @keyframes
+  const rulesText = rules.join("\n");
+  const animNames = new Set();
+  for (const m of rulesText.matchAll(/animation(?:-name)?\s*:\s*([\w-]+)/g)) {
+    if (keyframes[m[1]]) animNames.add(m[1]);
   }
-
-  const kfBlocks = [...new Set(animNames)].map(n => keyframes[n]).join("\n\n");
+  const kfBlocks = [...animNames].map(n => keyframes[n]).filter(Boolean).join("\n\n");
 
   return [kfBlocks, ...rules].filter(Boolean).join("\n\n");
 }
 
-// Extract CSS custom properties used in CSS for an element
+// Extract CSS custom properties used by an element
 function extractCSSVars(css, usedCSS) {
   if (!usedCSS) return "";
-  const varNames = [];
-  const varRe = /var\((-{2}[\w-]+)\)/g;
-  let m;
-  while ((m = varRe.exec(usedCSS)) !== null) varNames.push(m[1]);
-  if (!varNames.length) return "";
+  const varNames = new Set();
+  for (const m of usedCSS.matchAll(/var\((--[\w-]+)\)/g)) varNames.add(m[1]);
+  if (!varNames.size) return "";
 
-  const rootVars = [];
-  const rootRe = /([-\w]+)\s*:\s*([^;]+)/g;
-  const rootBlock = css.match(/:root\s*\{([^}]+)\}/s)?.[1] || "";
-  let rm;
-  while ((rm = rootRe.exec(rootBlock)) !== null) {
-    const name = "--" + rm[1].replace(/^--/, "");
-    if (varNames.includes(name)) {
-      rootVars.push(`  ${name}: ${rm[2].trim()};`);
+  const definitions = new Map();
+  for (const m of css.matchAll(/(--[\w-]+)\s*:\s*([^;}\n]+)/g)) {
+    if (varNames.has(m[1]) && !definitions.has(m[1])) {
+      definitions.set(m[1], m[2].trim());
     }
   }
-  if (!rootVars.length) return "";
-  return `:root {\n${rootVars.join("\n")}\n}`;
+  if (!definitions.size) return "";
+
+  const vars = [...definitions.entries()].map(([k, v]) => `  ${k}: ${v};`);
+  return `:root {\n${vars.join("\n")}\n}`;
 }
 
 // Extract all color values from CSS

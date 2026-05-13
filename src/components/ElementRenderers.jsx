@@ -1,4 +1,31 @@
+import { useEffect, useRef } from "react";
 import { Icon } from "./Icons";
+
+// ─── Shadow DOM preview — renders real HTML+CSS in full isolation ──────────────
+function ShadowPreview({ html, css, interactive }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let shadow;
+    try { shadow = el.attachShadow({ mode: "open" }); }
+    catch { shadow = el.shadowRoot; }
+    if (!shadow) return;
+
+    shadow.innerHTML = `
+      <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        :host { display: flex; align-items: center; justify-content: center; width: 100%; }
+        ${interactive ? "" : "* { pointer-events: none !important; cursor: default !important; }"}
+        ${css || ""}
+      </style>
+      ${html || ""}
+    `;
+  }, [html, css, interactive]);
+
+  return <div ref={ref} style={{ width: "100%", minHeight: 40 }} />;
+}
 
 // ─── Variant-based renderers (demo project) ───────────────────────────────────
 
@@ -270,11 +297,13 @@ export function renderElementInteractive(el) {
 }
 
 function renderElementInner(el, interactive) {
-  const v = el.variant;
-  if (!v) {
-    if (el.html) return <div style={{ fontSize: 11, pointerEvents: interactive ? "auto" : "none" }} dangerouslySetInnerHTML={{ __html: el.html }} />;
-    return null;
+  // Real extracted element → render with Shadow DOM isolation
+  if (el.html && el.html.trim().length > 10) {
+    return <ShadowPreview html={el.html} css={el.css || ""} interactive={interactive} />;
   }
+
+  const v = el.variant;
+  if (!v) return null;
 
   if (v.kind === "icon-raw" && el.html) {
     return (
