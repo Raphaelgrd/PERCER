@@ -1,121 +1,110 @@
-import Anthropic from "@anthropic-ai/sdk";
-
-// ─── Client factory ───────────────────────────────────────────────────────────
-
-export function createClient(apiKey) {
-  return new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
-}
-
-// ─── Extract root vars from CSS ───────────────────────────────────────────────
-
-function getRootVars(css) {
-  const m = css.match(/:root\s*\{([^}]*)\}/s);
-  return m ? m[1].trim().slice(0, 3000) : "";
-}
-
-// ─── Extract class list from HTML string ──────────────────────────────────────
-
-function getClasses(html) {
-  const classes = new Set();
-  for (const m of html.matchAll(/class="([^"]+)"/g)) {
-    for (const c of m[1].split(/\s+/)) if (c) classes.add(c);
+async function callClaude(apiKey, messages, maxTokens = 4000) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "anthropic-dangerous-request-override": "allow-browser",
+    },
+    body: JSON.stringify({ model: "claude-opus-4-5", max_tokens: maxTokens, messages }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Erreur API ${res.status}`);
   }
-  return [...classes];
+  const data = await res.json();
+  return data.content[0]?.text || "";
 }
 
-// ─── Analyze a single element ────────────────────────────────────────────────
+export async function analyzeHTMLFile(htmlContent, apiKey, onProgress) {
+  onProgress?.("Claude analyse le site…");
 
-export async function analyzeElement(client, element, fullCSS) {
-  if (!element.html) return null;
+  // Truncate HTML if too large (keep head + first 80KB)
+  const html = htmlContent.length > 80000
+    ? htmlContent.slice(0, 80000) + "\n<!-- truncated -->"
+    : htmlContent;
 
-  const classes = getClasses(element.html);
-  const rootVars = getRootVars(fullCSS);
+  const text = await callClaude(apiKey, [{
+    role: "user",
+    content: `Analyse ce code source HTML/CSS et extrais les éléments visuels principaux.
 
-  const prompt = `You are a CSS expert reproducing UI components with pixel-perfect accuracy.
+\`\`\`html
+${html}
+\`\`\`
 
-ELEMENT HTML:
-${element.html.slice(0, 2500)}
+Réponds UNIQUEMENT avec ce JSON (sans markdown, sans explication) :
+{
+  "colors": [{ "name": "accent", "hex": "#43f2a1" }],
+  "typography": [{ "family": "Inter", "weight": 700, "size": 48, "sample": "Texte exemple" }],
+  "buttons": [{
+    "name": "Bouton principal",
+    "html": "<a class='btn btn-primary'>Texte</a>",
+    "css": "/* CSS COMPLET standalone — résous TOUS les var(--x) en vraies valeurs */"
+  }],
+  "logo": { "name": "Nom du site", "html": "<svg ...> ou <img ...>" }
+}
 
-ELEMENT CLASSES: ${classes.join(", ")}
+Règles :
+- Max 6 couleurs (les principales)
+- Max 3 typographies (titres, corps, accent)
+- Max 3 boutons PRINCIPAUX seulement, CSS complet avec valeurs réelles (aucun var())
+- Logo uniquement si présent dans le HTML`
+  }]);
 
-CURRENT EXTRACTED CSS (may be incomplete or have unresolved vars):
-${(element.css || "").slice(0, 3000)}
+  onProgress?.("Traitement…");
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("Claude n'a pas retourné de JSON valide");
 
-ROOT CSS VARIABLES:
-${rootVars}
+  const data = JSON.parse(match[0]);
+  return buildElements(data);
+}
 
-Your task:
-1. Produce a COMPLETE, SELF-CONTAINED CSS for this component
-2. Resolve ALL var(--x) to their actual values from the root variables
-3. Include :hover, :focus, :active, ::before, ::after states
-4. Include @keyframes if the component uses animations
-5. Include relevant @media queries
-6. Do NOT include body/html/section/main rules
-7. Use :host instead of :root for custom properties
+function buildElements(data) {
+  const elements = {
+    colors: [], typography: [], buttons: [], forms: [],
+    cards: [], nav: [], footer: [], hero: [],
+    icons: [], images: [], anim: [], layouts: [],
+  };
 
-Respond with ONLY valid JSON (no markdown fences):
-{"css": "...complete css...", "description": "one-line visual description"}`;
-
-  try {
-    const msg = await client.messages.create({
-      model: "claude-haiku-4-5",
-      max_tokens: 2048,
-      messages: [{ role: "user", content: prompt }],
+  // Colors
+  (data.colors || []).forEach((c, i) => {
+    elements.colors.push({
+      id: `co_${i}`, name: c.name || c.hex, src: "IA", category: "colors",
+      variant: { kind: "color", hex: c.hex },
+      html: null, css: `color: ${c.hex};\nbackground: ${c.hex};`, js: null, notes: null,
+      aiEnhanced: true,
     });
+  });
 
-    const text = msg.content[0]?.text || "";
-    // Extract JSON — handle potential extra text
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-    const parsed = JSON.parse(jsonMatch[0]);
-    if (!parsed.css) return null;
-    return parsed;
-  } catch (e) {
-    console.error("Claude analyze error:", e.message);
-    return null;
-  }
-}
+  // Typography
+  (data.typography || []).forEach((t, i) => {
+    elements.typography.push({
+      id: `ty_${i}`, name: `${t.family} / ${t.size}px`, src: "IA", category: "typography",
+      variant: { kind: "type", text: t.sample || "Exemple", family: t.family, size: Math.min(t.size, 36), weight: t.weight, style: "normal" },
+      html: null, css: `font-family: "${t.family}";\nfont-size: ${t.size}px;\nfont-weight: ${t.weight};`,
+      js: null, notes: null, aiEnhanced: true,
+    });
+  });
 
-// ─── Batch analyze all elements in a project ─────────────────────────────────
-// onProgress(done, total, currentName)
+  // Buttons
+  (data.buttons || []).forEach((b, i) => {
+    elements.buttons.push({
+      id: `bt_${i}`, name: b.name || "Bouton", src: "IA", category: "buttons",
+      variant: { kind: "btn", label: b.name },
+      html: b.html, css: b.css, js: null, notes: null, aiEnhanced: true,
+    });
+  });
 
-export async function analyzeAllElements(client, projectElements, fullCSS, onProgress) {
-  // Collect all elements that have real HTML (not demo mocks)
-  const candidates = [];
-  for (const [cat, els] of Object.entries(projectElements)) {
-    if (!Array.isArray(els)) continue;
-    for (const el of els) {
-      if (el.html && el.html.trim().length > 20) {
-        candidates.push({ cat, el });
-      }
-    }
-  }
-
-  if (!candidates.length) return projectElements;
-
-  const updated = JSON.parse(JSON.stringify(projectElements)); // deep clone
-  let done = 0;
-
-  for (const { cat, el } of candidates) {
-    onProgress?.(done, candidates.length, el.name);
-
-    const result = await analyzeElement(client, el, fullCSS);
-    if (result?.css) {
-      const idx = updated[cat].findIndex(e => e.id === el.id);
-      if (idx !== -1) {
-        updated[cat][idx] = {
-          ...updated[cat][idx],
-          css: result.css,
-          aiEnhanced: true,
-          aiDescription: result.description || null,
-        };
-      }
-    }
-    done++;
-    // Small delay to respect rate limits
-    await new Promise(r => setTimeout(r, 200));
+  // Logo
+  if (data.logo?.html) {
+    elements.icons.push({
+      id: "logo_0", name: data.logo.name || "Logo", src: "IA", category: "icons",
+      variant: { kind: "icon-raw" },
+      html: data.logo.html, css: "svg, img { max-height: 48px; width: auto; }", js: null, notes: null,
+      aiEnhanced: true,
+    });
   }
 
-  onProgress?.(done, candidates.length, null);
-  return updated;
+  return elements;
 }

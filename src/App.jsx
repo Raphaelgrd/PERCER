@@ -9,7 +9,6 @@ import { DetailPanel } from "./components/DetailPanel";
 import { Icon } from "./components/Icons";
 import { CATEGORIES, DEMO_PROJECT, DEMO_ELEMENTS } from "./data/categories";
 import { loadProjects, saveProjects, loadElements, saveElements, saveProjectCSS, loadProjectCSS } from "./lib/storage";
-import { createClient, analyzeAllElements } from "./lib/claudeAnalyzer";
 
 // ─── Initial state ─────────────────────────────────────────────────────────────
 
@@ -50,7 +49,6 @@ export default function App() {
   const [selectedElementId, setSelectedElementId] = useState(null);
   const [modal, setModal] = useState(null); // null | 'create' | 'apikey'
   const [projectElements, setProjectElements] = useState({});
-  const [aiProgress, setAiProgress] = useState(null); // null | "Analyse 2/12…"
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("percer_api_key") || "");
 
   const project = projects.find(p => p.id === selectedProjectId) || null;
@@ -117,12 +115,6 @@ export default function App() {
     if (selectedProjectId !== "demo") saveElements(selectedProjectId, updated);
   };
 
-  const handleAIAnalyze = () => {
-    if (!apiKey) { setModal("apikey"); return; }
-    const fullCSS = loadProjectCSS(selectedProjectId) || "";
-    startAIAnalysis(apiKey, projectElements, fullCSS);
-  };
-
   const handleUploadComplete = (result, file) => {
     const { elements: extracted, css, pages, total } = result;
 
@@ -142,30 +134,6 @@ export default function App() {
 
     const firstCat = CATEGORIES.find(c => (extracted[c.id]?.length || 0) > 0);
     if (firstCat) setCategoryId(firstCat.id);
-
-    // Auto-start AI analysis immediately after extraction
-    const key = localStorage.getItem("percer_api_key") || "";
-    if (key) {
-      startAIAnalysis(key, extracted, css || "");
-    } else {
-      setModal("apikey");
-    }
-  };
-
-  const startAIAnalysis = (key, elements, fullCSS) => {
-    const client = createClient(key);
-    setAiProgress("Démarrage…");
-    analyzeAllElements(client, elements, fullCSS, (done, total, name) => {
-      if (name) setAiProgress(`✦ IA ${done + 1}/${total} — ${name.slice(0, 22)}…`);
-      else setAiProgress(null);
-    }).then(updated => {
-      setProjectElements(updated);
-      saveElements(selectedProjectId, updated);
-      setAiProgress(null);
-    }).catch(e => {
-      console.error("AI analyze failed:", e);
-      setAiProgress(null);
-    });
   };
 
   // Keyboard shortcuts
@@ -232,7 +200,12 @@ export default function App() {
             </div>
           </div>
           <div className="main">
-            <UploadZone project={project} onComplete={handleUploadComplete} />
+            <UploadZone
+              project={project}
+              onComplete={handleUploadComplete}
+              apiKey={apiKey}
+              onNeedKey={() => setModal("apikey")}
+            />
           </div>
         </div>
       )}
@@ -258,8 +231,6 @@ export default function App() {
               elements={elements}
               selectedId={selectedElementId}
               onSelect={(el) => setSelectedElementId(prev => prev === el.id ? null : el.id)}
-              onAIAnalyze={selectedProjectId !== "demo" ? handleAIAnalyze : null}
-              aiProgress={aiProgress}
             />
           </div>
 
@@ -285,8 +256,6 @@ export default function App() {
             setApiKey(key);
             localStorage.setItem("percer_api_key", key);
             setModal(null);
-            const fullCSS = loadProjectCSS(selectedProjectId) || "";
-            startAIAnalysis(key, projectElements, fullCSS);
           }}
           onClose={() => setModal(null)}
         />
