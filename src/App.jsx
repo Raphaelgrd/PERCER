@@ -8,7 +8,8 @@ import { CategoryView } from "./components/CategoryView";
 import { DetailPanel } from "./components/DetailPanel";
 import { Icon } from "./components/Icons";
 import { CATEGORIES, DEMO_PROJECT, DEMO_ELEMENTS } from "./data/categories";
-import { loadProjects, saveProjects, loadElements, saveElements, saveProjectCSS } from "./lib/storage";
+import { loadProjects, saveProjects, loadElements, saveElements, saveProjectCSS, loadProjectCSS } from "./lib/storage";
+import { createClient, analyzeAllElements } from "./lib/claudeAnalyzer";
 
 // ─── Initial state ─────────────────────────────────────────────────────────────
 
@@ -47,8 +48,10 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [categoryId, setCategoryId] = useState("buttons");
   const [selectedElementId, setSelectedElementId] = useState(null);
-  const [modal, setModal] = useState(null); // null | 'create'
+  const [modal, setModal] = useState(null); // null | 'create' | 'apikey'
   const [projectElements, setProjectElements] = useState({});
+  const [aiProgress, setAiProgress] = useState(null); // null | "Analyse 2/12…"
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem("percer_api_key") || "");
 
   const project = projects.find(p => p.id === selectedProjectId) || null;
   const category = CATEGORIES.find(c => c.id === categoryId) || null;
@@ -112,6 +115,25 @@ export default function App() {
     };
     setProjectElements(updated);
     if (selectedProjectId !== "demo") saveElements(selectedProjectId, updated);
+  };
+
+  const handleAIAnalyze = () => {
+    if (!apiKey) { setModal("apikey"); return; }
+    const fullCSS = loadProjectCSS(selectedProjectId) || "";
+    const client = createClient(apiKey);
+    setAiProgress("Démarrage…");
+    analyzeAllElements(client, projectElements, fullCSS, (done, total, name) => {
+      if (name) setAiProgress(`Analyse ${done + 1}/${total} — ${name.slice(0, 24)}…`);
+      else setAiProgress(null);
+    }).then(updated => {
+      setProjectElements(updated);
+      saveElements(selectedProjectId, updated);
+      setAiProgress(null);
+    }).catch(e => {
+      console.error("AI analyze failed:", e);
+      setAiProgress(null);
+      alert("Erreur IA : " + e.message);
+    });
   };
 
   const handleUploadComplete = (result, file) => {
@@ -228,6 +250,8 @@ export default function App() {
               elements={elements}
               selectedId={selectedElementId}
               onSelect={(el) => setSelectedElementId(prev => prev === el.id ? null : el.id)}
+              onAIAnalyze={selectedProjectId !== "demo" ? handleAIAnalyze : null}
+              aiProgress={aiProgress}
             />
           </div>
 
@@ -245,6 +269,55 @@ export default function App() {
       {modal === "create" && (
         <CreateModal onClose={() => setModal(null)} onCreate={createProject} />
       )}
+
+      {modal === "apikey" && (
+        <APIKeyModal
+          defaultKey={apiKey}
+          onConfirm={(key) => {
+            setApiKey(key);
+            localStorage.setItem("percer_api_key", key);
+            setModal(null);
+            setTimeout(handleAIAnalyze, 100);
+          }}
+          onClose={() => setModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── API Key modal ─────────────────────────────────────────────────────────────
+
+function APIKeyModal({ defaultKey, onConfirm, onClose }) {
+  const [key, setKey] = useState(defaultKey || "");
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 28, width: 440, boxShadow: "0 24px 64px rgba(0,0,0,0.4)" }}>
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 6, color: "var(--text)" }}>Clé API Anthropic</div>
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 20, lineHeight: 1.6 }}>
+          Claude va analyser chaque composant extrait et reconstituer son CSS à la perfection — même si le parser a raté des styles. La clé est stockée localement.
+        </div>
+        <input
+          autoFocus
+          type="password"
+          placeholder="sk-ant-..."
+          value={key}
+          onChange={e => setKey(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && key.startsWith("sk-") && onConfirm(key)}
+          style={{ width: "100%", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 7, padding: "10px 12px", fontFamily: "JetBrains Mono", fontSize: 12, color: "var(--text)", outline: "none", marginBottom: 16, boxSizing: "border-box" }}
+        />
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button className="btn ghost" onClick={onClose}>Annuler</button>
+          <button
+            className="btn primary"
+            disabled={!key.startsWith("sk-")}
+            onClick={() => onConfirm(key)}
+            style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5)", border: "none" }}
+          >
+            ✦ Lancer l'analyse IA
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

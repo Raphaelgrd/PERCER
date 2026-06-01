@@ -18,7 +18,7 @@ const DESCRIPTIONS = {
   layouts:    "Patterns de mise en page : grilles, splits, hero+sections, etc.",
 };
 
-export function CategoryView({ project, category, elements, selectedId, onSelect }) {
+export function CategoryView({ project, category, elements, selectedId, onSelect, onAIAnalyze, aiProgress }) {
   const [q, setQ] = useState("");
   const [view, setView] = useState("grid");
   const [exporting, setExporting] = useState(false);
@@ -57,11 +57,24 @@ export function CategoryView({ project, category, elements, selectedId, onSelect
           <p>{DESCRIPTIONS[category?.id] || "Éléments extraits automatiquement depuis le site."}</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
+          {onAIAnalyze && (
+            <button
+              className="btn"
+              onClick={onAIAnalyze}
+              disabled={!!aiProgress}
+              style={{ background: aiProgress ? "var(--surface)" : "linear-gradient(135deg,#7c3aed,#4f46e5)", color: "#fff", border: "none", gap: 6 }}
+            >
+              {aiProgress ? (
+                <><Icon name="spinner" size={13} /> {aiProgress}</>
+              ) : (
+                <><span style={{ fontSize: 13 }}>✦</span> Analyser avec IA</>
+              )}
+            </button>
+          )}
           <button className="btn" onClick={handleExport} disabled={exporting || !elements.length}>
             <Icon name={exporting ? "spinner" : "download"} size={13} />
             {exporting ? "Export…" : "Exporter"}
           </button>
-          <button className="btn primary"><Icon name="plus" size={13} stroke={2.2} /> Ajouter</button>
         </div>
       </div>
 
@@ -118,7 +131,12 @@ function ElementCard({ el, selected, categoryId, onSelect }) {
             {el.variant.hex}
           </div>
         )}
-        {el.notes && (
+        {el.aiEnhanced && (
+          <div style={{ position: "absolute", top: 6, left: 6, background: "linear-gradient(135deg,#7c3aed,#4f46e5)", borderRadius: 4, padding: "2px 6px", fontSize: 9, fontFamily: "JetBrains Mono", color: "#fff", letterSpacing: "0.04em" }}>
+            ✦ IA
+          </div>
+        )}
+        {el.notes && !el.aiEnhanced && (
           <div style={{ position: "absolute", top: 6, right: 6, background: "var(--accent-soft)", border: "1px solid var(--accent)", borderRadius: 4, padding: "1px 5px", fontSize: 9, fontFamily: "JetBrains Mono", color: "var(--accent-strong)", textTransform: "uppercase" }}>
             CSS pur
           </div>
