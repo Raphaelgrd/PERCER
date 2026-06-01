@@ -3,11 +3,20 @@ import { Icon } from "./Icons";
 import { parseZip } from "../lib/zipParser";
 import { analyzeHTMLFile } from "../lib/claudeAnalyzer";
 
+async function fetchSiteHTML(url) {
+  // Use allorigins proxy to bypass CORS
+  const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+  const res = await fetch(proxy);
+  if (!res.ok) throw new Error(`Impossible de récupérer le site (${res.status})`);
+  return res.text();
+}
+
 export function UploadZone({ project, onComplete, apiKey, onNeedKey }) {
   const [state, setState] = useState("idle");
   const [progress, setProgress] = useState(0);
   const [log, setLog] = useState([]);
   const [errorMsg, setErrorMsg] = useState("");
+  const [urlInput, setUrlInput] = useState("");
   const zipRef = useRef(null);
   const htmlRef = useRef(null);
 
@@ -27,23 +36,44 @@ export function UploadZone({ project, onComplete, apiKey, onNeedKey }) {
     }
   };
 
-  const handleHTML = async (file) => {
-    if (!file) return;
-    if (!apiKey) { onNeedKey?.(() => handleHTML(file)); return; }
+  const analyzeHTML = async (html, fileName) => {
+    if (!apiKey) { onNeedKey?.(); return; }
     setState("uploading");
-    setProgress(30); setLog(["Lecture du HTML…"]);
+    setProgress(30); setLog(["HTML récupéré, Claude analyse…"]);
     try {
-      const html = await file.text();
       const elements = await analyzeHTMLFile(html, apiKey, (msg) => {
         setLog(l => [...l, msg]);
         setProgress(p => Math.min(p + 30, 95));
       });
       const total = Object.values(elements).reduce((a, b) => a + b.length, 0);
       setState("done");
-      setTimeout(() => onComplete({ elements, css: "", pages: 1, total, detectedLibs: [] }, file), 500);
+      const fakeFile = { name: fileName, size: html.length };
+      setTimeout(() => onComplete({ elements, css: "", pages: 1, total, detectedLibs: [] }, fakeFile), 500);
     } catch (e) {
       setErrorMsg(e.message); setState("error");
     }
+  };
+
+  const handleURL = async () => {
+    const url = urlInput.trim();
+    if (!url) return;
+    if (!apiKey) { onNeedKey?.(); return; }
+    setState("uploading");
+    setProgress(10); setLog([`Récupération de ${url}…`]);
+    try {
+      const html = await fetchSiteHTML(url);
+      setLog(l => [...l, `${(html.length / 1024).toFixed(0)} Ko récupérés`]);
+      setProgress(25);
+      await analyzeHTML(html, new URL(url).hostname);
+    } catch (e) {
+      setErrorMsg(e.message); setState("error");
+    }
+  };
+
+  const handleHTMLFile = async (file) => {
+    if (!file) return;
+    const html = await file.text();
+    await analyzeHTML(html, file.name);
   };
 
   const handleDrop = (e) => {
@@ -51,7 +81,7 @@ export function UploadZone({ project, onComplete, apiKey, onNeedKey }) {
     const file = e.dataTransfer.files?.[0];
     if (!file) return setState("idle");
     const name = file.name.toLowerCase();
-    if (name.endsWith(".html") || name.endsWith(".htm")) handleHTML(file);
+    if (name.endsWith(".html") || name.endsWith(".htm")) handleHTMLFile(file);
     else handleZip(file);
   };
 
@@ -65,7 +95,7 @@ export function UploadZone({ project, onComplete, apiKey, onNeedKey }) {
       </div>
 
       <input ref={zipRef} type="file" accept=".zip" style={{ display: "none" }} onChange={e => handleZip(e.target.files?.[0])} />
-      <input ref={htmlRef} type="file" accept=".html,.htm" style={{ display: "none" }} onChange={e => handleHTML(e.target.files?.[0])} />
+      <input ref={htmlRef} type="file" accept=".html,.htm" style={{ display: "none" }} onChange={e => handleHTMLFile(e.target.files?.[0])} />
 
       <div
         className={"upload-zone " + (state === "dragging" ? "dragging" : "")}
@@ -74,15 +104,40 @@ export function UploadZone({ project, onComplete, apiKey, onNeedKey }) {
         onDrop={handleDrop}
       >
         {state !== "uploading" && state !== "done" && state !== "error" && <>
-          <div className="upload-icon"><Icon name="upload" size={22} /></div>
-          <h2>{state === "dragging" ? "Déposez pour analyser" : "Glissez votre fichier ici"}</h2>
-          <p style={{ marginBottom: 20 }}>HTML analysé par Claude · ZIP parsé localement</p>
-          <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-            <button className="btn primary" onClick={() => htmlRef.current?.click()} style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5)", border: "none" }}>
-              <span style={{ fontSize: 13 }}>✦</span> Fichier HTML + IA
+          <div className="upload-icon"><Icon name="globe" size={22} /></div>
+          <h2>{state === "dragging" ? "Déposez un fichier" : "Collez l'URL du site"}</h2>
+
+          {/* URL input */}
+          <div style={{ display: "flex", gap: 8, width: "100%", maxWidth: 480, margin: "16px auto 0" }}>
+            <input
+              value={urlInput}
+              onChange={e => setUrlInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleURL()}
+              placeholder="https://exemple.com"
+              style={{
+                flex: 1, background: "var(--bg)", border: "1px solid var(--border)",
+                borderRadius: 8, padding: "10px 14px", fontFamily: "JetBrains Mono",
+                fontSize: 12, color: "var(--text)", outline: "none",
+              }}
+            />
+            <button
+              className="btn primary"
+              onClick={handleURL}
+              disabled={!urlInput.trim()}
+              style={{ background: "linear-gradient(135deg,#7c3aed,#4f46e5)", border: "none", whiteSpace: "nowrap" }}
+            >
+              <span style={{ fontSize: 13 }}>✦</span> Analyser
             </button>
-            <button className="btn" onClick={() => zipRef.current?.click()}>
-              <Icon name="zip" size={13} /> ZIP complet
+          </div>
+
+          <div style={{ margin: "20px 0", color: "var(--text-faint)", fontSize: 11, fontFamily: "JetBrains Mono" }}>— ou —</div>
+
+          <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+            <button className="btn ghost sm" onClick={() => htmlRef.current?.click()}>
+              &lt;/&gt; Fichier HTML
+            </button>
+            <button className="btn ghost sm" onClick={() => zipRef.current?.click()}>
+              <Icon name="zip" size={12} /> ZIP
             </button>
           </div>
         </>}
