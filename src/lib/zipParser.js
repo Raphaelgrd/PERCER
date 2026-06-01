@@ -696,6 +696,65 @@ function reconstructAnimationCSS(jsContent, elementHtml) {
   return lines.join("\n\n");
 }
 
+// ─── HTML file parser (single .html file) ────────────────────────────────────
+
+export async function parseHTML(file, onProgress) {
+  const log = (msg) => onProgress?.({ type: "log", msg });
+  const progress = (pct) => onProgress?.({ type: "progress", pct });
+
+  log(`Lecture de ${file.name}…`);
+  progress(10);
+
+  const html = await file.text();
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const pageName = file.name;
+
+  // Inline <style> → CSS
+  const allCSS = [...doc.querySelectorAll("style")].map(s => s.textContent).join("\n");
+  log(`CSS inline : ${(allCSS.length / 1024).toFixed(1)} Ko`);
+  progress(25);
+
+  // Inline <script> → JS
+  const allJS = [...doc.querySelectorAll("script:not([src])")].map(s => s.textContent).join("\n");
+  if (allJS.length) log(`JS inline : ${(allJS.length / 1024).toFixed(1)} Ko`);
+  progress(35);
+
+  const keyframes = extractKeyframes(allCSS);
+  const detectedLibs = detectJSLibs(allJS);
+  if (detectedLibs.length) log(`Libs JS : ${detectedLibs.join(", ")}`);
+
+  const elements = { buttons: [], forms: [], cards: [], nav: [], footer: [], hero: [], icons: [], images: [] };
+  const seen = Object.fromEntries(Object.keys(elements).map(k => [k, new Set()]));
+
+  extractButtons(doc, pageName, allCSS, keyframes, allJS, seen.buttons, elements.buttons);
+  extractForms(doc, pageName, allCSS, keyframes, allJS, seen.forms, elements.forms);
+  extractCards(doc, pageName, allCSS, keyframes, allJS, seen.cards, elements.cards);
+  extractNav(doc, pageName, allCSS, keyframes, allJS, seen.nav, elements.nav);
+  extractFooter(doc, pageName, allCSS, keyframes, allJS, seen.footer, elements.footer);
+  extractHero(doc, pageName, allCSS, keyframes, allJS, seen.hero, elements.hero);
+  extractIcons(doc, pageName, seen.icons, elements.icons);
+  extractImages(doc, pageName, seen.images, elements.images);
+  progress(70);
+
+  const colors = extractColors(allCSS);
+  const typography = extractTypography(allCSS);
+  const animations = extractAnimations(allCSS, keyframes);
+  progress(90);
+
+  const allElements = {
+    buttons: elements.buttons, forms: elements.forms, cards: elements.cards,
+    nav: elements.nav, footer: elements.footer, hero: elements.hero,
+    typography, colors, icons: elements.icons, images: elements.images,
+    anim: animations, layouts: [],
+  };
+
+  const total = Object.values(allElements).reduce((a, b) => a + b.length, 0);
+  log(`✓ ${total} éléments extraits depuis ${file.name}`);
+  progress(100);
+
+  return { elements: allElements, css: allCSS, pages: 1, total, detectedLibs };
+}
+
 // ─── Main parser ──────────────────────────────────────────────────────────────
 
 export async function parseZip(file, onProgress) {

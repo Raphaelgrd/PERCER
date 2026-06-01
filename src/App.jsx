@@ -120,26 +120,12 @@ export default function App() {
   const handleAIAnalyze = () => {
     if (!apiKey) { setModal("apikey"); return; }
     const fullCSS = loadProjectCSS(selectedProjectId) || "";
-    const client = createClient(apiKey);
-    setAiProgress("Démarrage…");
-    analyzeAllElements(client, projectElements, fullCSS, (done, total, name) => {
-      if (name) setAiProgress(`Analyse ${done + 1}/${total} — ${name.slice(0, 24)}…`);
-      else setAiProgress(null);
-    }).then(updated => {
-      setProjectElements(updated);
-      saveElements(selectedProjectId, updated);
-      setAiProgress(null);
-    }).catch(e => {
-      console.error("AI analyze failed:", e);
-      setAiProgress(null);
-      alert("Erreur IA : " + e.message);
-    });
+    startAIAnalysis(apiKey, projectElements, fullCSS);
   };
 
   const handleUploadComplete = (result, file) => {
     const { elements: extracted, css, pages, total } = result;
 
-    // Update project metadata
     setProjects(ps => ps.map(p => p.id === selectedProjectId ? {
       ...p,
       status: "ready",
@@ -150,14 +136,36 @@ export default function App() {
       updated: "à l'instant",
     } : p));
 
-    // Store elements and CSS
     setProjectElements(extracted);
     saveElements(selectedProjectId, extracted);
     if (css) saveProjectCSS(selectedProjectId, css);
 
-    // Navigate to first non-empty category
     const firstCat = CATEGORIES.find(c => (extracted[c.id]?.length || 0) > 0);
     if (firstCat) setCategoryId(firstCat.id);
+
+    // Auto-start AI analysis immediately after extraction
+    const key = localStorage.getItem("percer_api_key") || "";
+    if (key) {
+      startAIAnalysis(key, extracted, css || "");
+    } else {
+      setModal("apikey");
+    }
+  };
+
+  const startAIAnalysis = (key, elements, fullCSS) => {
+    const client = createClient(key);
+    setAiProgress("Démarrage…");
+    analyzeAllElements(client, elements, fullCSS, (done, total, name) => {
+      if (name) setAiProgress(`✦ IA ${done + 1}/${total} — ${name.slice(0, 22)}…`);
+      else setAiProgress(null);
+    }).then(updated => {
+      setProjectElements(updated);
+      saveElements(selectedProjectId, updated);
+      setAiProgress(null);
+    }).catch(e => {
+      console.error("AI analyze failed:", e);
+      setAiProgress(null);
+    });
   };
 
   // Keyboard shortcuts
@@ -277,7 +285,8 @@ export default function App() {
             setApiKey(key);
             localStorage.setItem("percer_api_key", key);
             setModal(null);
-            setTimeout(handleAIAnalyze, 100);
+            const fullCSS = loadProjectCSS(selectedProjectId) || "";
+            startAIAnalysis(key, projectElements, fullCSS);
           }}
           onClose={() => setModal(null)}
         />

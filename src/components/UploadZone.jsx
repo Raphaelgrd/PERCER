@@ -1,15 +1,14 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { Icon } from "./Icons";
-import { parseZip } from "../lib/zipParser";
+import { parseZip, parseHTML } from "../lib/zipParser";
 
 export function UploadZone({ project, onComplete }) {
   const [state, setState] = useState("idle"); // idle | dragging | uploading | done | error
   const [progress, setProgress] = useState(0);
   const [log, setLog] = useState([]);
   const [errorMsg, setErrorMsg] = useState("");
-  const fileInputRef = useRef(null);
-
-  useEffect(() => () => {}, []);
+  const zipRef = useRef(null);
+  const htmlRef = useRef(null);
 
   const startParse = async (file) => {
     if (!file) return;
@@ -18,14 +17,16 @@ export function UploadZone({ project, onComplete }) {
     setLog([]);
     setErrorMsg("");
 
+    const isHTML = file.name.toLowerCase().endsWith(".html") || file.name.toLowerCase().endsWith(".htm");
+    const parser = isHTML ? parseHTML : parseZip;
+
     try {
-      const result = await parseZip(file, (ev) => {
+      const result = await parser(file, (ev) => {
         if (ev.type === "log") setLog(l => [...l, ev.msg]);
         if (ev.type === "progress") setProgress(ev.pct);
       });
-
       setState("done");
-      setTimeout(() => onComplete(result, file), 600);
+      setTimeout(() => onComplete(result, file), 500);
     } catch (e) {
       setErrorMsg(e.message || "Erreur inconnue lors du parsage.");
       setState("error");
@@ -39,27 +40,22 @@ export function UploadZone({ project, onComplete }) {
     else setState("idle");
   };
 
-  const handleFileInput = (e) => {
-    const file = e.target.files?.[0];
-    if (file) startParse(file);
-  };
+  const isHTML = project?.zipName?.endsWith(".html") || project?.zipName?.endsWith(".htm");
 
   return (
     <div className="main-inner">
       <div className="cat-header">
         <div className="left">
           <h1>Importer le site</h1>
-          <p>Glissez le ZIP du site téléchargé (wget, HTTrack, export CMS…). PERCER extrait automatiquement les boutons, cards, sections, couleurs, typographies, icônes et plus. Si des animations JS sont trouvées (GSAP, Webflow…), elles sont recréées en CSS pur.</p>
+          <p>
+            Glissez le <strong>ZIP</strong> du site (wget, HTTrack, export CMS…) ou un fichier <strong>HTML</strong> directement.
+            Claude analyse ensuite chaque composant pour reconstituer CSS et animations à la perfection.
+          </p>
         </div>
       </div>
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".zip,.tar.gz"
-        style={{ display: "none" }}
-        onChange={handleFileInput}
-      />
+      <input ref={zipRef} type="file" accept=".zip,.tar.gz" style={{ display: "none" }} onChange={e => startParse(e.target.files?.[0])} />
+      <input ref={htmlRef} type="file" accept=".html,.htm" style={{ display: "none" }} onChange={e => startParse(e.target.files?.[0])} />
 
       <div
         className={"upload-zone " + (state === "dragging" ? "dragging" : "")}
@@ -69,21 +65,18 @@ export function UploadZone({ project, onComplete }) {
       >
         {state !== "uploading" && state !== "done" && state !== "error" && <>
           <div className="upload-icon"><Icon name="upload" size={22} /></div>
-          <h2>{state === "dragging" ? "Déposez pour importer" : "Glissez-déposez le ZIP du site"}</h2>
-          <p>Formats acceptés : .zip, .tar.gz. Taille max recommandée : 200 Mo.</p>
+          <h2>{state === "dragging" ? "Déposez pour importer" : "Glissez-déposez votre fichier"}</h2>
+          <p style={{ marginBottom: 20 }}>ZIP complet ou fichier HTML standalone</p>
           <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-            <button className="btn primary" onClick={() => fileInputRef.current?.click()}>
-              <Icon name="zip" size={13} /> Sélectionner un fichier
+            <button className="btn primary" onClick={() => zipRef.current?.click()}>
+              <Icon name="zip" size={13} /> ZIP du site
             </button>
-            <button className="btn" onClick={() => {}} title="Bientôt disponible">
-              <Icon name="globe" size={13} /> Crawler une URL
+            <button className="btn" onClick={() => htmlRef.current?.click()}>
+              <span style={{ fontSize: 13, lineHeight: 1 }}>&lt;/&gt;</span> Fichier HTML
             </button>
           </div>
-          <div style={{ marginTop: 28, fontFamily: "JetBrains Mono", fontSize: 11, color: "var(--text-faint)" }}>
-            Ce projet a un ZIP déjà associé ?{" "}
-            <span style={{ color: "var(--accent)", cursor: "pointer" }} onClick={() => fileInputRef.current?.click()}>
-              Glissez-le ici
-            </span>
+          <div style={{ marginTop: 24, fontFamily: "JetBrains Mono", fontSize: 11, color: "var(--text-faint)" }}>
+            L'IA analysera automatiquement après l'extraction
           </div>
         </>}
 
@@ -99,8 +92,8 @@ export function UploadZone({ project, onComplete }) {
             <div className="file-row">
               <div className="file-icon"><Icon name="zip" size={14} /></div>
               <div className="file-info">
-                <div className="file-name">{project?.zipName || "archive.zip"}</div>
-                <div className="file-meta">{project?.zipSize || "—"} · ZIP</div>
+                <div className="file-name">{project?.zipName || "fichier"}</div>
+                <div className="file-meta">{project?.zipSize || "—"} · {isHTML ? "HTML" : "ZIP"}</div>
               </div>
               <div style={{ fontFamily: "JetBrains Mono", fontSize: 11, color: state === "done" ? "var(--success)" : "var(--accent)", display: "flex", alignItems: "center", gap: 4 }}>
                 {state === "done"
@@ -115,7 +108,7 @@ export function UploadZone({ project, onComplete }) {
             </div>
 
             <div className="progress-meta">
-              <span>{state === "done" ? "Extraction terminée" : "Extraction en cours…"}</span>
+              <span>{state === "done" ? "Extraction terminée — analyse IA en cours…" : "Extraction en cours…"}</span>
               <span>{progress}%</span>
             </div>
 
