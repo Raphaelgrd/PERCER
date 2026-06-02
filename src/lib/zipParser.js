@@ -696,6 +696,36 @@ function reconstructAnimationCSS(jsContent, elementHtml) {
   return lines.join("\n\n");
 }
 
+// ─── ZIP → source ({html, css, js}) for AI analysis ──────────────────────────
+// Reads a site ZIP and returns the raw source so Claude can analyze it,
+// exactly like a fetched URL.
+
+export async function zipToSource(file) {
+  let zip;
+  try { zip = await JSZip.loadAsync(file); }
+  catch (e) { throw new Error("ZIP illisible : " + e.message); }
+
+  const htmlFiles = [], cssFiles = [], jsFiles = [];
+  for (const [path, entry] of Object.entries(zip.files)) {
+    if (entry.dir) continue;
+    const p = path.toLowerCase();
+    if (p.endsWith(".html") || p.endsWith(".htm")) htmlFiles.push({ path, entry });
+    else if (p.endsWith(".css")) cssFiles.push({ path, entry });
+    else if (p.endsWith(".js") && !/node_modules|vendor|analytics|gtag|tagmanager/i.test(p)) jsFiles.push({ path, entry });
+  }
+
+  if (!htmlFiles.length) throw new Error("Aucun fichier HTML trouvé dans le ZIP");
+
+  // Prefer index.html, else the first HTML file
+  const main = htmlFiles.find(f => /index\.html?$/i.test(f.path)) || htmlFiles[0];
+  const html = await main.entry.async("text").catch(() => "");
+
+  const css = (await Promise.all(cssFiles.slice(0, 8).map(f => f.entry.async("text").catch(() => "")))).join("\n\n");
+  const js  = (await Promise.all(jsFiles.slice(0, 8).map(f => f.entry.async("text").catch(() => "")))).join("\n\n");
+
+  return { html, css, js };
+}
+
 // ─── HTML file parser (single .html file) ────────────────────────────────────
 
 export async function parseHTML(file, onProgress) {

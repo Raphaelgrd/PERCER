@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { Icon } from "./Icons";
-import { parseZip } from "../lib/zipParser";
+import { zipToSource } from "../lib/zipParser";
 import { analyzeHTMLFile, UnreadableSiteError } from "../lib/claudeAnalyzer";
 
 // ─── CORS proxies (tried in order until one works) ──────────────────────────────
@@ -91,17 +91,17 @@ export function UploadZone({ project, onComplete, apiKey, onNeedKey }) {
     setState("error");
   };
 
-  // ── ZIP (local parsing, no AI) ──
+  // ── ZIP → extract source → Claude (same AI pipeline as URL) ──
   const handleZip = async (file) => {
     if (!file) return;
-    setState("uploading"); setProgress(0); setLog([]); setCanFallback(false);
+    if (!getKey()) { onNeedKey?.(); return; }
+    setState("uploading"); setProgress(15); setLog(["Lecture du ZIP…"]); setCanFallback(false);
     try {
-      const result = await parseZip(file, (ev) => {
-        if (ev.type === "log") setLog((l) => [...l, ev.msg]);
-        if (ev.type === "progress") setProgress(ev.pct);
-      });
-      setState("done");
-      setTimeout(() => onComplete(result, file), 500);
+      const site = await zipToSource(file);
+      const kb = (site.html.length + site.css.length + site.js.length) / 1024;
+      setLog((l) => [...l, `${kb.toFixed(0)} Ko extraits du ZIP`]);
+      setProgress(40);
+      await analyzeSite(site, file.name, "");
     } catch (e) { fail(e); }
   };
 
